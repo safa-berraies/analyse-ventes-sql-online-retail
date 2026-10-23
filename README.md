@@ -8,19 +8,15 @@ Nettoyer et analyser les transactions d'une boutique en ligne pour mesurer le ch
 - Jeu « Online Retail » (UCI) : 541 909 lignes de transactions, du 01/12/2010 au 09/12/2011
   (décembre 2011 incomplet).
 - Colonnes : facture, code produit, description, quantité, date, prix unitaire, client, pays.
+NB : Le fichier « Online Retail » n'est pas inclus dans le dépôt (taille). Il est téléchargeable gratuitement sur le site de l'UCI Machine Learning Repository (https://archive.ics.uci.edu/dataset/352/online+retail). Le script SQL le charge puis construit la table nettoyée.
 
 ## Outils
-PostgreSQL (pgAdmin) : CTE, fonctions de fenêtre, agrégats filtrés, expressions régulières,
-jointures latérales.
+PostgreSQL (pgAdmin) : CTE, fonctions de fenêtre, agrégats filtrés, expressions régulières, jointures latérales.
 
 ## Démarche
 1. **Mise en place** : import du CSV en texte brut, puis conversion des types.
-2. **Audit de la table brute** : période, valeurs manquantes, quantités ou prix anormaux,
-   codes spéciaux. Chaque ligne est classée dans une catégorie, et le total retrouvé
-   (541 909 lignes, 9 747 747,93) sert de contrôle.
-3. **Nettoyage sans suppression** : table `online_retail_clean` avec dates converties, montant calculé,
-   type de ligne (vente, annulation, frais, ajustements) et marquage des doublons (`is_doublon`).
-   La table brute reste intacte.
+2. **Audit de la table brute** : période, valeurs manquantes, quantités ou prix anormaux, codes spéciaux. Chaque ligne est classée dans une catégorie, et le total retrouvé (541 909 lignes, 9 747 747,93) sert de contrôle.
+3. **Nettoyage sans suppression** : table `online_retail_clean` avec dates converties, montant calculé, type de ligne (vente, annulation, frais, ajustements) et marquage des doublons (`is_doublon`). La table brute reste intacte.
 4. **Vue d'analyse** : `v_ventes` (ventes sans doublons) sert de base aux analyses.
 5. **Contrôles de qualité** : doublons, libellés multiples, formats de codes produit, prix atypiques.
 6. **Analyses business** : CA par pays, top produits (brut puis net des annulations).
@@ -41,15 +37,11 @@ jointures latérales.
 | Top produit (CA net) | REGENCY CAKESTAND 3 TIER (161 963,94) |
 
 ## Choix méthodologiques
-- **Doublons** : 5 268 lignes strictement identiques sur les 8 colonnes, marquées et non supprimées.
-  Parmi les ventes, 5 221 doublons pèsent 0,24 % du CA. Exclusion retenue par prudence, et réversible.
-- **Codes produit** : analyse par `stock_code`, avec la description la plus fréquente comme libellé
-  (212 codes ont plusieurs descriptions, le plus souvent des variantes d'écriture).
-  Les 16 codes qui ne sont pas des produits (frais, saisies manuelles) sont exclus du top produits.
-- **Prix atypiques** : 55 codes ont un prix maximum supérieur à 10 fois leur médiane,
-  pour au plus 1 % du CA. Impact jugé négligeable.
-- **Ventes annulées** : le top produits net écarte les ventes annulées, rapprochées de leur
-  annulation par client et montant opposé.
+- **Doublons** : 5 268 lignes strictement identiques sur les 8 colonnes, marquées et non supprimées. Parmi les ventes, 5 221 doublons pèsent 0,24 % du CA. Exclusion retenue par prudence, et réversible.
+- **Codes produit** : analyse par `stock_code`, avec la description la plus fréquente comme libellé (212 codes ont plusieurs descriptions, le plus souvent des variantes d'écriture).
+Les 16 codes qui ne sont pas des produits (frais, saisies manuelles) sont exclus du top produits.
+- **Prix atypiques** : 55 codes ont un prix maximum supérieur à 10 fois leur médiane, pour au plus 1 % du CA. Impact jugé négligeable.
+- **Ventes annulées** : le top produits net écarte les ventes annulées, rapprochées de leur annulation par client et montant opposé.
 
 ## Conclusions
 
@@ -62,8 +54,7 @@ jointures latérales.
 
 ## Limites
 - Le rapprochement vente/annulation est approximatif, et les ventes sans client ne sont jamais rapprochées.
-- Le CA brut inclut quelques ventes de très forte valeur entièrement annulées ensuite ;
-  le CA net en tient compte.
+- Le CA brut inclut quelques ventes de très forte valeur entièrement annulées ensuite ; le CA net en tient compte.
 - Un quart des lignes n'a pas d'identifiant client, ce qui limite l'analyse des comportements d'achat.
 - Une seule année de données, avec un dernier mois incomplet.
 
