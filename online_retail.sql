@@ -2,7 +2,8 @@
 -- PROJET SQL : ANALYSE DES VENTES D'UNE BOUTIQUE EN LIGNE (Online Retail, UCI)
 -- Base PostgreSQL : online_retail
 -- Fichier source : "Online Retail.csv" (séparateur ; et décimale ,)
--- Ordre : 0 (mise en place) -> 1 (audit) -> 2 (nettoyage) -> 3 (analyses)
+-- Ordre : -- Ordre : 0 (mise en place) -> 1 (audit) -> 2 (nettoyage) -> 3 (analyses pays et produits, contrôles qualité) 
+-- -> 4 (définition du CA, évolution mensuelle) -> 5 (meilleurs clients) -> 6 (annulations)
 -- =====================================================================
 
 
@@ -22,10 +23,9 @@ CREATE TABLE online_retail_raw (
     country      TEXT
 );
 
--- IMPORT DU CSV (manuel, dans pgAdmin) : clic droit sur online_retail_raw > Import/Export Data
--- Réglages : Import, fichier "Online Retail.csv", Format csv, Header activé, Delimiter ;  Quote "  Escape "  Encoding UTF8
+-- IMPORT DU CSV (manuel, dans pgAdmin)
 
--- 0.2 Conversion des types : prix en nombre (virgule remplacée par un point) et quantité en entier. Les dates restent en texte, converties plus tard
+-- 0.2 Conversion des types 
 ALTER TABLE online_retail_raw
     ALTER COLUMN unit_price TYPE NUMERIC(12, 4)
         USING REPLACE(unit_price, ',', '.')::NUMERIC(12, 4),
@@ -72,7 +72,7 @@ FROM (
     HAVING COUNT(*) > 1
 ) AS groupes_doublons;
 
--- 1.3b Créer une vue regroupant les doublons exacts et leur nombre d'occurrences
+-- 1.3 Créer une vue regroupant les doublons exacts et leur nombre d'occurrences
 CREATE OR REPLACE VIEW groupes_doublons AS
 SELECT
     invoice_no, stock_code, description, quantity, invoice_date,
@@ -98,7 +98,7 @@ FROM groupes_doublons;
 
 -- lignes_excedentaires : 5268
 
--- 1.4 Valeurs manquantes (NULL ou chaînes vides) dans chaque colonne
+-- 1.4a Valeurs manquantes (NULL ou chaînes vides) dans chaque colonne
 SELECT
     COUNT(*) FILTER (WHERE invoice_no IS NULL OR TRIM(invoice_no) = '')       AS invoice_no_missing,
     COUNT(*) FILTER (WHERE stock_code IS NULL OR TRIM(stock_code) = '')       AS stock_code_missing,
@@ -112,7 +112,7 @@ FROM online_retail_raw;
 
 -- ==> description manquante = 1454, customer_id manquant = 135080, les autres = 0
 
--- 1.4a Factures associées à plusieurs clients distincts 
+-- 1.4b Factures associées à plusieurs clients distincts 
 SELECT
     invoice_no,
     COUNT(DISTINCT NULLIF(TRIM(customer_id), ''))            AS nb_clients,
@@ -123,7 +123,7 @@ HAVING COUNT(DISTINCT NULLIF(TRIM(customer_id), '')) > 1
 ORDER BY nb_clients DESC;
 
 
--- 1.4b Nombre de factures mixtes (client connu sur certaines lignes, absent sur d'autres) 
+-- 1.4c Nombre de factures mixtes (client connu sur certaines lignes, absent sur d'autres) 
 SELECT COUNT(*) AS factures_mixtes
 FROM (
     SELECT invoice_no
@@ -134,7 +134,7 @@ FROM (
 ) AS t;
 
 
--- 1.4c Qualité de la colonne customer_id : lignes avec et sans client
+-- 1.4d Qualité de la colonne customer_id : lignes avec et sans client
 SELECT
     COUNT(*) AS total_lignes,
     COUNT(*) FILTER (WHERE NULLIF(TRIM(customer_id), '') IS NOT NULL) AS lignes_avec_client,
@@ -237,7 +237,7 @@ ORDER BY nb_lignes DESC;
 
 
 -- =====================================================================
--- 2. CONSTRUCTION DE LA TABLE NETTOYÉE (la table brute reste intacte)
+-- 2. CONSTRUCTION DE LA TABLE NETTOYÉE 
 -- =====================================================================
 
 -- 2.1 Création de online_retail_clean : date convertie en TIMESTAMP, codes en majuscules, vides mis à NULL, colonne montant, colonne type_ligne
@@ -393,7 +393,7 @@ ORDER BY ordinal_position;
 
 
 -- =====================================================================
--- 3. ANALYSES BUSINESS : NIVEAU 1
+-- 3. ANALYSES BUSINESS : PAYS ET PRODUITS (avec contrôles de qualité)
 -- =====================================================================
 
 -- 3.1 CA par pays avec la part de chaque pays dans le CA total et le CA moyen par facture.
@@ -412,45 +412,7 @@ ORDER BY ca DESC;
 
 /*le Royaume-Uni représente 85.1 % du CA */
 
-
--- 3.2 Top 10 des produits par CA brut (ventes seules) avec quantité vendue et part du CA total 
-
-WITH descriptions_comptees AS (
-    SELECT stock_code, description, COUNT(*) AS nb_occurrences
-    FROM v_ventes
-    WHERE description IS NOT NULL
-    GROUP BY stock_code, description
-	ORDER BY COUNT(*) DESC
-),
-descriptions_classees AS (
-    SELECT
-        stock_code,
-        description,
-        ROW_NUMBER() OVER (
-            PARTITION BY stock_code
-            ORDER BY nb_occurrences DESC, description ASC
-        ) AS rang
-    FROM descriptions_comptees
-),
-ca_produit AS (
-    SELECT stock_code, SUM(quantity) AS quantite_vendue, SUM(montant) AS ca
-    FROM v_ventes
-    GROUP BY stock_code
-)
-SELECT
-    p.stock_code,
-    d.description,
-    p.quantite_vendue,
-    ROUND(p.ca, 2) AS ca,
-    ROUND(100.0 * p.ca / NULLIF((SELECT SUM(montant) FROM v_ventes), 0), 1) AS pct_ca
-FROM ca_produit p
-LEFT JOIN descriptions_classees d
-       ON p.stock_code = d.stock_code
-      AND d.rang = 1
-ORDER BY p.ca DESC
-LIMIT 10;
-
--- 3.3 Les 10 plus grosses lignes de vente par montant, avec la première annulation postérieure du même client, du même produit, de quantité opposée
+-- 3.2 Les 10 plus grosses lignes de vente par montant, avec la première annulation postérieure du même client, du même produit, de quantité opposée
 -- ET de même prix unitaire (numéro et date affichés)
 SELECT
     v.invoice_no,
@@ -481,7 +443,7 @@ ORDER BY v.montant DESC
 LIMIT 10;
 
 
--- 3.4 Codes produit ayant plusieurs descriptions distinctes (casse et espaces ignorés) dans les ventes
+-- 3.3 Codes produit ayant plusieurs descriptions distinctes (casse et espaces ignorés) dans les ventes
 SELECT
     stock_code,
     COUNT(DISTINCT UPPER(TRIM(description)))  AS nb_descriptions,
@@ -500,7 +462,7 @@ ORDER BY nb_descriptions DESC, stock_code;
    l'effet du mélange de variantes sur les totaux est jugé négligeable. */
 
 
--- 3.5 Formats des codes produit dans les ventes et annulations (hors copies)
+-- 3.4a Formats des codes produit dans les ventes et annulations (hors copies)
 SELECT
     CASE
         WHEN stock_code ~ '^[0-9]{5}$'       THEN '1_cinq_chiffres_exactement'
@@ -522,7 +484,7 @@ ORDER BY 1;
 -- 5 chiffres = 2879 codes ; 5 chiffres + lettres = 926 codes (874585.25 de CA net) ; autres formats = 16 codes
 
 
--- 3.5b Codes du format 4 dans les ventes et annulations hors copies
+-- 3.4b Codes du format 4 dans les ventes et annulations hors copies
 SELECT
     stock_code,
     type_ligne,
@@ -540,7 +502,7 @@ ORDER BY ABS(SUM(montant)) DESC;
 pas du code : un même produit peut donc avoir les deux. Décision : le top 10 produits (3.7) ne garde que les 3805 codes produit. */
 
 
--- 3.6 Codes produit dont le prix unitaire maximum dépasse 10 fois le prix médian (ventes hors copies, au moins 5 lignes) :
+-- 3.5a Codes produit dont le prix unitaire maximum dépasse 10 fois le prix médian (ventes hors copies, au moins 5 lignes) :
 -- signal d'un code qui mélange plusieurs produits ou d'une erreur de prix.
 
 SELECT
@@ -562,12 +524,12 @@ ORDER BY ca DESC;
    Ensemble, ils représentent au plus 1 % du CA des ventes (22502 : 0,50 %, dont une vente de 38 970 annulée ;
    chacun des autres : 0,08 % au plus). L'impact sur les totaux est jugé négligeable. */
 
--- 3.6b Index pour accélérer le rapprochement ventes/annulations : recherche directe par client et par montant
+-- 3.5b Index pour accélérer le rapprochement ventes/annulations : recherche directe par client et par montant
 CREATE INDEX idx_retail_clean_client_montant
 ON online_retail_clean (customer_id, montant);
 
 
--- 3.7 Top 10 des produits par CA net (ventes moins annulations, hors copies)
+-- 3.6 Top 10 des produits par CA net (ventes moins annulations, hors copies)
 WITH descriptions_comptees AS (
     SELECT stock_code, description, COUNT(*) AS nb_occurrences
     FROM v_ventes
@@ -619,6 +581,7 @@ SELECT
     ROUND(p.ca_brut, 2) AS ca_brut,
     ROUND(p.retours, 2) AS retours,
     ROUND(p.ca_net, 2)  AS ca_net,
+	ROUND(100.0 * p.ca_net / NULLIF((SELECT SUM(montant) FROM v_ventes), 0), 1) AS pct_ca,
     p.quantite_nette
 FROM ca_produit p
 LEFT JOIN descriptions_classees d
@@ -631,9 +594,12 @@ LIMIT 10;
    ventes annulées (rapprochées de leur annulation par client et montant opposé). Le rapprochement est
    approximatif ; seul ca_net est comparable, ca_brut et retours ne sont plus des totaux bruts. */
 
-
+SELECT stock_code, min(unit_price), MAX(unit_price)
+FROM public.online_retail_clean
+WHERE stock_code IN ('22423', '85123A') AND unit_price > 0
+GROUP BY stock_code;
 -- =====================================================================
--- 4. DÉFINITION DU CHIFFRE D'AFFAIRES
+-- 4. DÉFINITION DU CHIFFRE D'AFFAIRES ET ÉVOLUTION MENSUELLE
 -- =====================================================================
 
 -- 4.0 Décomposition du CA hors copies : CA brut (ventes), retours (annulations), CA net après retours, frais et ajustements, et total de la table hors copies.
@@ -667,22 +633,34 @@ ORDER BY 1;
 -- 5. ANALYSE DES MEILLEURS CLIENTS
 -- =====================================================================
 
+-- 5.1 CA généré et part du chiffre d'affaires
 
-
--- 5.0 CA généré et part du chiffre d'affaires
-WITH ca_par_client AS (
+WITH v_ventes_nettes AS (
+SELECT v.*
+FROM v_ventes v
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM online_retail_clean a
+    WHERE a.type_ligne = 'annulation'
+      AND NOT a.is_doublon
+      AND a.customer_id = v.customer_id
+      AND a.montant = -v.montant
+      AND a.invoice_date >= v.invoice_date
+)
+),
+ca_par_client AS (
     SELECT
         customer_id,
         ROUND(SUM(montant), 2) AS ca_client,
         COUNT(DISTINCT invoice_no) AS nb_factures
-    FROM v_ventes
+    FROM v_ventes_nettes
     WHERE customer_id IS NOT NULL
     GROUP BY customer_id
 ),
 totaux AS (
     SELECT
         SUM(montant) AS ca_total
-    FROM v_ventes
+    FROM v_ventes_nettes
 ),
 ca_clients_identifies AS (
     SELECT
@@ -702,8 +680,11 @@ CROSS JOIN ca_clients_identifies i
 ORDER BY c.ca_client DESC
 LIMIT 10;
 
+/* Top 10 des clients par CA net : on retire d'abord les ventes annulées (rapprochées d'une annulation du même client, de montant opposé 
+et postérieure), puis on calcule le CA par client identifié, son nombre de factures et sa part du CA total et du CA des clients identifiés. 
+Les retours partiels ne sont pas déduits. */
 
--- 5.1 Part du CA associé aux lignes sans identifiant client
+-- 5.2 Part du CA associé aux lignes sans identifiant client
 SELECT
     CASE
         WHEN customer_id IS NULL THEN 'Sans client identifié'
@@ -742,13 +723,14 @@ significative au chiffre d'affaires */
 
 
 -- =====================================================================
--- 6. Analyse des annulations
+-- 6. ANALYSE DES ANNULATIONS
 -- =====================================================================
 
 
 -- 6.1 Taux d'annulation : montant et nombre de factures
 WITH indicateurs AS (
     SELECT
+		DATE_TRUNC('month', invoice_date)::date AS mois,
         SUM(montant) FILTER (
             WHERE type_ligne = 'vente'
         ) AS ca_brut,
@@ -763,12 +745,249 @@ WITH indicateurs AS (
         ) AS nb_factures_annulees
     FROM online_retail_clean
     WHERE NOT is_doublon
+	GROUP BY DATE_TRUNC('month', invoice_date)::date
 )
-SELECT
+SELECT mois,
     ROUND(ca_brut, 2) AS ca_brut,
     ROUND(montant_annulations, 2) AS montant_annulations,
     ROUND(100.0 * ABS(montant_annulations) / ca_brut, 2) AS taux_annulation_montant_pct,
     nb_factures_ventes,
     nb_factures_annulees,
-    ROUND( 100.0 * nb_factures_annulees/ nb_factures_ventes + nb_factures_annulees) AS taux_factures_annulees_pct
-FROM indicateurs;
+    ROUND( 100.0 * nb_factures_annulees/ (nb_factures_ventes + nb_factures_annulees)) AS taux_factures_annulees_pct
+FROM indicateurs
+ORDER BY mois;
+
+
+-- 6.2 calculs des KPIs
+
+WITH indicateurs AS (
+    SELECT
+		ROUND(SUM(montant) FILTER (WHERE type_ligne IN ('vente', 'annulation')), 2)      AS ca_net_apres_retours,
+        SUM(montant) FILTER (
+            WHERE type_ligne = 'vente'
+        ) AS ca_brut,
+        SUM(montant) FILTER (
+            WHERE type_ligne = 'annulation'
+        ) AS montant_annulations,
+        COUNT(DISTINCT invoice_no) FILTER (
+            WHERE type_ligne = 'vente'
+        ) AS nb_commandes,
+		COUNT(DISTINCT invoice_no) FILTER (
+            WHERE type_ligne = 'vente' AND customer_id IS NOT NULL
+        ) AS nb_commandes_client,
+        COUNT(DISTINCT customer_id) FILTER (
+            WHERE type_ligne = 'vente'
+              AND customer_id IS NOT NULL
+        ) AS nb_clients
+    FROM online_retail_clean
+    WHERE NOT is_doublon
+),
+
+kpi AS (
+    SELECT
+        ca_brut,
+		ca_net_apres_retours,
+        montant_annulations,
+        nb_commandes,
+		nb_commandes_client,
+        nb_clients
+    FROM indicateurs
+)
+
+SELECT
+	ca_brut,
+	ca_net_apres_retours,
+    ROUND(
+        ca_brut / NULLIF(nb_commandes, 0),
+        2
+    ) AS panier_moyen,
+    nb_commandes,
+    nb_clients,
+    ROUND(
+        nb_commandes_client::numeric / NULLIF(nb_clients, 0),
+        2
+    ) AS frequence_achat,
+    ROUND(
+        100.0 * ABS(montant_annulations)
+        / NULLIF(ca_brut, 0),
+        2
+    ) AS taux_annulation_pct
+FROM kpi;
+
+-- Rechercher des nouveaux clients
+
+WITH premieres_commandes AS (
+    SELECT
+        customer_id,
+        MIN(invoice_date) AS date_premiere_commande
+    FROM online_retail_clean
+    WHERE NOT is_doublon
+      AND type_ligne = 'vente'
+      AND customer_id IS NOT NULL
+    GROUP BY customer_id
+),
+
+nouveaux_clients_mois AS (
+    SELECT
+        DATE_TRUNC('month', date_premiere_commande)::date AS mois,
+        COUNT(*) AS nb_nouveaux_clients
+    FROM premieres_commandes
+    GROUP BY DATE_TRUNC('month', date_premiere_commande)::date
+),
+
+clients_actifs_mois AS (
+    SELECT
+        DATE_TRUNC('month', invoice_date)::date AS mois,
+        COUNT(DISTINCT customer_id) AS nb_clients_actifs
+    FROM online_retail_clean
+    WHERE NOT is_doublon
+      AND type_ligne = 'vente'
+      AND customer_id IS NOT NULL
+    GROUP BY DATE_TRUNC('month', invoice_date)::date
+)
+
+SELECT
+    a.mois,
+    COALESCE(n.nb_nouveaux_clients, 0) AS nb_nouveaux_clients,
+    a.nb_clients_actifs,
+    ROUND(
+        100.0 * COALESCE(n.nb_nouveaux_clients, 0)
+        / NULLIF(a.nb_clients_actifs, 0),
+        2
+    ) AS taux_nouveaux_clients_pct
+FROM clients_actifs_mois a
+LEFT JOIN nouveaux_clients_mois n
+    ON a.mois = n.mois
+ORDER BY a.mois;
+
+-- Clients récurrents
+
+
+WITH commandes_par_client AS (
+    SELECT
+        customer_id,
+        COUNT(DISTINCT invoice_no) AS nb_commandes
+    FROM online_retail_clean
+    WHERE NOT is_doublon
+      AND type_ligne = 'vente'
+      AND customer_id IS NOT NULL
+      AND invoice_date >= DATE '2011-01-01'
+      AND invoice_date < DATE '2012-01-01'
+    GROUP BY customer_id
+),
+categories AS (
+    SELECT
+        CASE
+            WHEN nb_commandes = 1 THEN '1 commande'
+            WHEN nb_commandes BETWEEN 2 AND 5 THEN '2 à 5 commandes'
+            WHEN nb_commandes BETWEEN 6 AND 10 THEN '6 à 10 commandes'
+            WHEN nb_commandes BETWEEN 11 AND 25 THEN '11 à 25 commandes'
+            WHEN nb_commandes BETWEEN 26 AND 50 THEN '26 à 50 commandes'
+            ELSE 'Plus de 50 commandes'
+        END AS categorie,
+        CASE
+            WHEN nb_commandes = 1 THEN 1
+            WHEN nb_commandes BETWEEN 2 AND 5 THEN 2
+            WHEN nb_commandes BETWEEN 6 AND 10 THEN 3
+            WHEN nb_commandes BETWEEN 11 AND 25 THEN 4
+            WHEN nb_commandes BETWEEN 26 AND 50 THEN 5
+            ELSE 6
+        END AS ordre
+    FROM commandes_par_client
+),
+repartition AS (
+    SELECT
+        categorie,
+        ordre,
+        COUNT(*) AS nb_clients
+    FROM categories
+    GROUP BY categorie, ordre
+)
+SELECT
+    categorie,
+    nb_clients,
+    ROUND(
+        100.0 * nb_clients / SUM(nb_clients) OVER (),
+        2
+    ) AS part_clients_pct
+FROM repartition
+ORDER BY ordre;
+
+
+-- 6.3 Top 10 des produits ayant le montant d'annulation le plus élevé
+
+SELECT
+    stock_code,
+    description,
+    COUNT(*) AS nb_lignes_annulation,
+    COUNT(DISTINCT invoice_no) AS nb_factures_annulation,
+    SUM(ABS(quantity)) AS quantite_annulee,
+    ROUND(SUM(ABS(montant)), 2) AS montant_annulations
+FROM online_retail_clean
+WHERE NOT is_doublon
+  AND type_ligne = 'annulation'
+GROUP BY
+    stock_code,
+    description
+ORDER BY montant_annulations DESC
+LIMIT 10;
+
+
+-- 6.4 Top 10 des produits physiques selon le montant annulé
+SELECT
+    stock_code,
+    description,
+    COUNT(*) AS nb_lignes_annulation,
+    COUNT(DISTINCT invoice_no) AS nb_factures_annulation,
+    SUM(ABS(quantity)) AS quantite_annulee,
+    ROUND(SUM(ABS(montant)), 2) AS montant_annulations
+FROM online_retail_clean
+WHERE NOT is_doublon
+  AND type_ligne = 'annulation'
+  AND stock_code NOT IN ('AMAZONFEE','M','D','S','POST','CRUK', 'BANK CHARGES')
+GROUP BY stock_code, description
+ORDER BY montant_annulations DESC
+LIMIT 10;
+
+/* Deux produits dominent les annulations : 23843 (80 995 unités, 168 469,60) et 23166 (74 494 unités, 77 479,64), avec une seule facture 
+d'annulation pour le premier. Ces valeurs exceptionnelles sont vérifiées en 6.4. */
+   
+-- 6.5 Vérifier les quantités et montants annulés anormalement élevés
+SELECT
+    invoice_no,
+    invoice_date,
+    stock_code,
+    description,
+    quantity,
+    montant,unit_price,
+    customer_id
+FROM online_retail_clean
+WHERE NOT is_doublon
+  AND type_ligne IN ('vente','annulation')
+  AND stock_code IN ('23843', '23166')
+ORDER BY ABS(quantity) DESC;
+
+/*Conclusion : Les quantités exceptionnellement élevées détectées pour deux produits correspondent à des ventes suivies d'annulations 
+intégrales quelques minutes plus tard. Les montants et les quantités se compensent exactement : leur impact net sur le CA est nul.
+Ces opérations doivent être distinguées des retours partiels dans l'analyse.*/
+
+-- 6.6 Top 10 des produits physiques retournés sans les quantités exceptionnellement élevées
+
+SELECT
+    stock_code,
+    description,
+    COUNT(*) AS nb_lignes_annulation,
+    COUNT(DISTINCT invoice_no) AS nb_factures_annulation,
+    SUM(ABS(quantity)) AS quantite_annulee,
+    ROUND(SUM(ABS(montant)), 2) AS montant_annulations
+FROM online_retail_clean
+WHERE NOT is_doublon
+  AND type_ligne = 'annulation'
+  AND stock_code NOT IN ('AMAZONFEE','M','D','S','POST','CRUK', 'BANK CHARGES','23843','23166')
+GROUP BY stock_code, description
+ORDER BY montant_annulations DESC
+LIMIT 10;
+
+/* Top 10 des produits les plus annulés, hors les deux cas exceptionnels 23843 et 23166 (vente annulée en bloc, cf. 6.4).
+REGENCY CAKESTAND 3 TIER est le plus annulé (9 697,05 sur 180 factures, 855 unités), devant WHITE HANGING HEART T-LIGHT HOLDER (6 624,30). 
+Ce sont aussi deux des produits les plus vendus : leurs annulations restent faibles par rapport à leur CA. Les autres montants sont inférieurs à 6 600. */
